@@ -3,7 +3,10 @@ import tempfile
 import os
 from ingest import ingest
 from agent import ask
-from query_translation import multi_query_retrieve, rag_fusion_retrieve
+from query_translation import (
+    multi_query_retrieve, rag_fusion_retrieve,
+    decomposition_parallel, decomposition_sequential,
+)
 from langchain_core.prompts import PromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -32,12 +35,14 @@ if uploaded_file and uploaded_file.name != st.session_state.get("ingested_file")
 st.header("2. Choose Retrieval Strategy")
 strategy = st.radio(
     "Strategy",
-    ["Agentic RAG", "Multi-Query", "RAG Fusion"],
+    ["Agentic RAG", "Multi-Query", "RAG Fusion", "Decomposition (Parallel)", "Decomposition (Sequential)"],
     horizontal=True,
     help=(
         "Agentic RAG: LLM decides when to retrieve | "
         "Multi-Query: rephrase → retrieve → deduplicate | "
-        "RAG Fusion: rephrase → retrieve → RRF re-rank"
+        "RAG Fusion: rephrase → retrieve → RRF re-rank | "
+        "Decomposition Parallel: split → answer each independently → synthesize | "
+        "Decomposition Sequential: split → answer step-by-step, each builds on prior"
     )
 )
 
@@ -104,5 +109,27 @@ if st.button("Ask") and question:
         st.write_stream(stream_answer_from_docs(docs, question))
 
         sources = sorted(set(f"Page {d.metadata.get('page','?') + 1}" for d in docs))
+        if sources:
+            st.markdown("**Sources:** " + ", ".join(sources))
+
+    elif strategy in ("Decomposition (Parallel)", "Decomposition (Sequential)"):
+        fn = decomposition_parallel if strategy == "Decomposition (Parallel)" else decomposition_sequential
+        label = "independently" if strategy == "Decomposition (Parallel)" else "step-by-step"
+
+        with st.spinner(f"Decomposing question & answering sub-questions {label}..."):
+            result = fn(question)
+
+        with st.expander("Sub-questions & individual answers"):
+            for i, step in enumerate(result["steps"], 1):
+                st.markdown(f"**Step {i}: {step['question']}**")
+                st.write(step["answer"])
+                st.divider()
+
+        st.markdown("### Final synthesized answer")
+        st.write(result["final_answer"])
+
+        sources = sorted(set(
+            f"Page {d.metadata.get('page','?') + 1}" for d in result["all_docs"]
+        ))
         if sources:
             st.markdown("**Sources:** " + ", ".join(sources))
